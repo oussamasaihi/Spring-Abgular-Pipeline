@@ -1,0 +1,99 @@
+pipeline {
+    agent any
+    environment {
+        version = '1'
+        VM_URL = '192.168.1.8'
+        DOCKER_REGISTRY = 'docker.io'
+        DOCKER_IMAGE_F = "oussamasaihi/frontend:latest"
+        DOCKER_IMAGE_B = "oussamasaihi/backend:latest"
+    }
+    stages {
+        stage('Checkout & build') {
+            steps {
+                script {
+                    git branch: 'OussamaSaihiBranch', url: 'https://github.com/oussamasaihi/Spring-Abgular-Pipeline.git'
+                    sh 'mvn clean package'
+                }
+            }
+        }
+
+        stage('Sonar') {
+            environment {
+                SONAR_URL = "http://${VM_URL}:9000"
+            }
+            steps {
+                withCredentials([string(credentialsId: 'sonarqube', variable: 'SONAR_AUTH_TOKEN')]) {
+                    sh "mvn sonar:sonar -Dsonar.login=\$SONAR_AUTH_TOKEN -Dsonar.host.url=\${SONAR_URL}"
+                }
+            }
+        }
+
+        stage('JUnit / Mockito') {
+            steps {
+                sh 'mvn test'
+            }
+        }
+
+        stage('Upload to Nexus') {
+            steps {
+                script {
+                    nexusArtifactUploader(
+                        nexusVersion: 'nexus3',
+                        protocol: 'http',
+                        nexusUrl: '192.168.1.8:8081/repository/MavenRepo',
+                        version: "${version}",
+                        credentialsId: 'Nexus',
+                        artifacts: [
+                            [
+                                artifactId: 'springapp',
+                                classifier: '',
+                                file: "target/springapp.jar",
+                                type: 'jar'
+                            ]
+                        ]
+                    )
+                }
+            }
+        }
+
+        stage('Deploy and Push Backend') {
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE_B} -f Dockerfile ."
+
+
+                    def dockerImageB = docker.image("${DOCKER_REGISTRY}/${DOCKER_IMAGE_B}")
+
+
+                    docker.withRegistry('', 'docker-cred') {
+                        dockerImageB.push()
+
+                    }
+                }
+            }
+        }
+        stage('checkout Deploy and Push Frontend') {
+            steps {
+                 script {
+                    git branch: 'Oussama', url: 'https://github.com/GhofraneFerchichi/Achat-Front.git'
+
+                    sh "docker build -t ${DOCKER_IMAGE_F} -f crud-tuto-front/Dockerfile-frontend crud-tuto-front"
+
+                    def dockerImageF = docker.image("${DOCKER_REGISTRY}/${DOCKER_IMAGE_F}")
+
+                    docker.withRegistry('', 'docker-cred') {
+                        dockerImageF.push()
+                    }
+                }
+            }
+        }
+        stage('Deploy All Using Docker Compose') {
+            steps {
+                 git branch: 'OussamaSaihiBranch', url: 'https://github.com/oussamasaihi/Spring-Abgular-Pipeline.git'
+                 sh 'docker-compose -f docker-compose.yml up -d'
+            }
+        }
+    }
+}
+
+
